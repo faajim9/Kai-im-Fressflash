@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Rainbow Collector</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #000000; margin: 0; display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; overflow: hidden; font-family: 'Inter', sans-serif;
+        }
+        #game-container {
+            width: 95vw; height: 95vh; max-width: 1000px; max-height: 800px; position: relative;
+            background-color: #000000; box-shadow: 0 0 40px rgba(255, 255, 255, 0.1); border-radius: 12px;
+        }
+        #gameCanvas {
+            display: block; width: 100%; height: 100%; border-radius: 12px; cursor: none;
+        }
+        .ui-panel {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1); color: #ffffff; border-radius: 8px; font-size: 1.25rem;
+            font-weight: 600; backdrop-filter: blur(5px); z-index: 10; min-width: 250px; text-align: center;
+        }
+        #health-status {
+            position: absolute; top: 20px; left: 20px; padding: 8px 15px;
+            background: rgba(255, 0, 0, 0.5); color: #ffffff; border-radius: 8px; font-weight: bold;
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.5); z-index: 10;
+        }
+        #powerup-status {
+            position: absolute; top: 20px; right: 20px; padding: 8px 15px;
+            background: linear-gradient(90deg, #ff007b, #ff8a00, #e9ff00); color: #000000; border-radius: 8px;
+            font-weight: bold; display: none; box-shadow: 0 0 15px rgba(255, 0, 123, 0.7); z-index: 10;
+        }
+        /* Custom styles for the fire button */
+        #fire-button {
+            border: 4px solid #fff;
+            box-shadow: 0 0 20px rgba(255, 50, 50, 0.8);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div class="ui-panel">Punkte: <span id="score">0</span></div>
+    <div id="health-status">
+        Leben: <span id="health">100</span>%
+    </div>
+    <div id="powerup-status">
+        PU AKTIV: <span id="powerup-timer">10.0</span>s
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <!-- FEUER-KNOPF FÜR MOBILE GERÄTE (JETZT LINKS) -->
+    <button id="fire-button" class="md:hidden absolute bottom-5 left-5 w-20 h-20 bg-red-600 hover:bg-red-700 text-white font-extrabold text-xl rounded-full shadow-2xl transition transform active:scale-95 z-50">
+        FEUER
+    </button>
+</div>
+
+<!-- Death Screen Overlay -->
+<div id="death-screen" class="fixed inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center text-white z-50 hidden">
+    <h1 class="text-6xl font-extrabold mb-8 text-red-500">GAME OVER</h1>
+    <div class="space-y-4 text-2xl text-center">
+        <p>Deine Punkte: <span id="final-score" class="font-bold text-yellow-400">0</span></p>
+        <p>Rekord: <span id="high-score" class="font-bold text-green-400">0</span></p>
+        <p>Spieldauer: <span id="game-duration" class="font-bold text-blue-400">0s</span></p>
+    </div>
+    <button id="restart-button" class="mt-12 px-8 py-4 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xl rounded-lg shadow-xl transition transform hover:scale-105">
+        Nochmal spielen
+    </button>
+</div>
+
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('score');
+    const healthDisplay = document.getElementById('health');
+    const powerupStatusDisplay = document.getElementById('powerup-status');
+    const powerupTimerDisplay = document.getElementById('powerup-timer');
+    const fireButton = document.getElementById('fire-button');
+
+    // --- CONSTANTS AND ASSET PATHS ---
+    const PLAYER_IMAGE_URL = 'https://i.imgur.com/6iI6ULG.png';
+    const POWERUP_IMAGE_URL = 'https://i.imgur.com/l0t8vZl.png';
+    const ENEMY_IMAGE_URL = 'https://i.imgur.com/ZGO3WvU.png'; 
+    const RAINBOW_COLORS = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082', '#9400D3'];
+    
+    // Weltgröße (16000x16000)
+    const WORLD_WIDTH = 16000; 
+    const WORLD_HEIGHT = 16000; 
+    const INITIAL_PLAYER_RADIUS = 40; 
+    
+    // ANGEPASST: Objektlimits (Food um 40% reduziert)
+    const MAX_FOOD = 9600; // 16000 * 0.6 = 9600
+    const MAX_POWERUPS = 96; 
+    const MAX_ENEMIES = 40; 
+    
+    const PLAYER_HEALTH = 100;
+    const POWERUP_SPAWN_INTERVAL = 3; 
+    const POWERUP_ANIMATION_DURATION = 3000;
+    const POWERUP_SCALE_FACTOR = 1.5;
+
+    // --- GAME STATE ---
+    let player;
+    let foodItems = [];
+    let powerUps = [];
+    let enemies = []; 
+    let playerProjectiles = [];
+    let enemyProjectiles = [];
+    let activePowerUpAnimations = []; 
+    let score = 0;
+    let highScore = 0; 
+    let gameStartTime = 0;
+    let isGameOver = false;
+    let mouseX = 0; 
+    let mouseY = 0; 
+    let assetsLoaded = false;
+    let lastPowerUpSpawnTime = 0;
+    let lastEnemySpawnTime = 0;
+    let scaleFactor = 1; 
+    let cameraX = 0; 
+    let cameraY = 0;
+    let assets = {}; 
+    let lastHealthRegenTime = 0; 
+
+    // Konstanter Skalierungsfaktor für Entitäten (20% der Spieler-Wachstumsintensität)
+    const ENTITY_GROWTH_INTENSITY = 0.2; 
+    // Zoom-Limit, damit der Spieler "bildschirmgroß" wird
+    const MIN_SCALE_FACTOR = 0.05; 
+
+    // --- HELPER FUNCTIONS ---
+    function dist(x1, y1, x2, y2) {
+        return Math.sqrt((x1 - x2)**2 + (y1 - y2)**2);
+    }
+
+    // Funktion zur Berechnung des Skalierungsfaktors für Entitäten (Gegner, Food, PowerUps)
+    function getEntityScaleFactor() {
+        if (!player || !player.baseRadius) return 1;
+        // (Aktuelle Größe / Startgröße - 1) * Intensität + 1
+        return (player.baseRadius / INITIAL_PLAYER_RADIUS - 1) * ENTITY_GROWTH_INTENSITY + 1;
+    }
+
+    // --- CLASSES ---
+
+    class Entity {
+        constructor(x, y, radius, image) {
+            this.x = x; 
+            this.y = y; 
+            this.radius = radius;
+            this.image = image;
+            this.baseRadius = radius; 
+            this.health = 1;
+        }
+
+        draw(cameraX, cameraY) {
+            const drawX = this.x - cameraX;
+            const drawY = this.y - cameraY;
+
+            // Skalierung basierend auf Spielerwachstum
+            const entityScale = getEntityScaleFactor(); 
+            const scaledRadius = this.radius * entityScale;
+            
+            if (this.image && this.image.complete) {
+                const drawSize = scaledRadius * 2;
+                ctx.drawImage(this.image, drawX - scaledRadius, drawY - scaledRadius, drawSize, drawSize);
+            } else {
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(drawX, drawY, scaledRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+    class Projectile {
+        constructor(x, y, radius, color, velocityX, velocityY, damage, type) {
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+            this.color = color;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
+            this.damage = damage;
+            this.type = type;
+        }
+
+        update() {
+            this.x += this.velocityX;
+            this.y += this.velocityY;
+        }
+
+        draw(cameraX, cameraY) {
+            const drawX = this.x - cameraX;
+            const drawY = this.y - cameraY;
+            
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            
+            if (this.type === 'player') {
+                // Spielerprojektile als Herz
+                ctx.font = `${this.radius * 2}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('❤️', drawX, drawY);
+            } else {
+                // Gegnerprojektile als einfache Kreise
+                ctx.arc(drawX, drawY, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+    
+    class Enemy extends Entity {
+        constructor(x, y, radius, image) {
+            super(x, y, radius, image);
+            this.health = 2; // Gegner muss 2 mal getroffen werden
+            this.speed = 3;
+            this.lastShotTime = 0;
+            this.shootInterval = 1000;
+            this.isDying = false;
+            this.deathTime = 0;
+            this.deathDuration = 1500; // 1.5 Sekunden Blinken
+        }
+
+        update() {
+            if (this.isDying) return; 
+
+            const dx = player.x - this.x;
+            const dy = player.y - this.y;
+            const distance = dist(player.x, player.y, this.x, this.y);
+
+            if (distance > this.radius + player.radius) { 
+                const angle = Math.atan2(dy, dx);
+                const vx = Math.cos(angle) * this.speed;
+                const vy = Math.sin(angle) * this.speed;
+
+                // FEHLERBEHEBUNG: Gegner bewegen sich jetzt direkt mit this.speed zum Spieler.
+                // Der fehlerhafte Geschwindigkeitsfaktor (this.speed / distance) wurde entfernt.
+                this.x += vx; 
+                this.y += vy;
+            }
+
+            this.checkShoot(dx, dy, distance);
+        }
+
+        draw(cameraX, cameraY) {
+            if (this.isDying) {
+                // Blink-Logik: Blinken 1,5 Sekunden lang wild auf (alle 50ms ein/aus)
+                const elapsed = Date.now() - this.deathTime;
+                if (elapsed % 100 < 50) {
+                    return; // Zeichnen überspringen, um den Blinkeffekt zu erzeugen
+                }
+            }
+            super.draw(cameraX, cameraY);
+        }
+
+        checkShoot(dx, dy, distance) {
+            const now = Date.now();
+            if (now > this.lastShotTime + this.shootInterval && distance < 1000) { 
+                this.lastShotTime = now;
+                const angle = Math.atan2(dy, dx);
+                const projectileSpeed = 8;
+                const velocityX = Math.cos(angle) * projectileSpeed;
+                const velocityY = Math.sin(angle) * projectileSpeed;
+
+                enemyProjectiles.push(new Projectile(
+                    this.x, this.y, 5, '#CCCCCC', 
+                    velocityX, velocityY, 10, 'enemy'
+                ));
+            }
+        }
+    }
+
+    class Player extends Entity {
+        constructor(x, y, radius, image) {
+            super(x, y, radius, image);
+            this.health = PLAYER_HEALTH;
+            this.speed = 7; 
+            this.isPoweredUp = false;
+            this.powerUpEndTime = 0;
+            this.baseSpeed = 7; 
+            this.growthAnimation = null; 
+            this.lastShotTime = 0;
+            this.shotCooldown = 200;
+        }
+
+        update() {
+            if (isGameOver) return; 
+
+            const mouseRelativeX = mouseX - canvas.width / 2;
+            const mouseRelativeY = mouseY - canvas.height / 2;
+            // Target im Weltkoordinatensystem
+            const worldTargetX = this.x + mouseRelativeX / scaleFactor;
+            const worldTargetY = this.y + mouseRelativeY / scaleFactor;
+
+            const dx = worldTargetX - this.x;
+            const dy = worldTargetY - this.y;
+            const distance = dist(worldTargetX, worldTargetY, this.x, this.y);
+
+            if (distance > this.radius / 2) { 
+                const angle = Math.atan2(dy, dx);
+                const vx = Math.cos(angle) * this.speed;
+                const vy = Math.sin(angle) * this.speed;
+                const moveDist = Math.min(this.speed, distance);
+
+                this.x += vx * (moveDist / this.speed); 
+                this.y += vy * (moveDist / this.speed); 
+            }
+            
+            // Power-Up Logic
+            if (this.isPoweredUp) {
+                const now = Date.now();
+                if (now > this.powerUpEndTime) {
+                    this.deactivatePowerUp();
+                } else {
+                    powerupTimerDisplay.textContent = ((this.powerUpEndTime - now) / 1000).toFixed(1);
+                }
+            }
+
+            // Growth Animation
+            if (this.growthAnimation) {
+                const elapsed = Date.now() - this.growthAnimation.startTime;
+                const progress = Math.min(1, elapsed / this.growthAnimation.duration);
+                const { startRadius, targetRadius, startSpeed, targetSpeed } = this.growthAnimation;
+                
+                this.radius = startRadius + (targetRadius - startRadius) * progress;
+                this.speed = startSpeed + (targetSpeed - startSpeed) * progress;
+                
+                if (progress === 1) this.growthAnimation = null;
+            } 
+            
+            // Apply scale/speed if no animation is running
+            else {
+                 const factor = this.isPoweredUp ? POWERUP_SCALE_FACTOR : 1;
+                 this.radius = this.baseRadius * factor;
+                 this.speed = this.baseSpeed * factor;
+            }
+
+            this.x = Math.max(this.radius, Math.min(WORLD_WIDTH - this.radius, this.x));
+            this.y = Math.max(this.radius, Math.min(WORLD_HEIGHT - this.radius, this.y));
+        }
+
+        draw(cameraX, cameraY) {
+            // Blink-Effekt bei Power-Up, um den Zustand zu visualisieren
+            if (this.isPoweredUp && Date.now() % 100 < 50) return;
+            super.draw(cameraX, cameraY);
+        }
+        
+        shoot() {
+            if (isGameOver) return;
+            const now = Date.now();
+            if (now > this.lastShotTime + this.shotCooldown) {
+                this.lastShotTime = now;
+                
+                const targetWorldX = cameraX + mouseX / scaleFactor;
+                const targetWorldY = cameraY + mouseY / scaleFactor;
+                const angle = Math.atan2(targetWorldY - this.y, targetWorldX - this.x);
+                
+                const projectileSpeed = 15;
+
+                playerProjectiles.push(new Projectile(
+                    this.x, this.y, 10 / scaleFactor, 'red', 
+                    Math.cos(angle) * projectileSpeed, 
+                    Math.sin(angle) * projectileSpeed, 1, 'player' 
+                ));
+            }
+        }
+
+        takeDamage(damage) {
+            this.health -= damage;
+            this.health = Math.max(0, this.health);
+            healthDisplay.textContent = this.health.toFixed(0);
+            if (this.health <= 0) {
+                isGameOver = true;
+                showDeathScreen();
+            }
+            // Flash red on damage
+            const originalBG = document.body.style.backgroundColor;
+            document.body.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
+            setTimeout(() => document.body.style.backgroundColor = originalBG, 100);
+        }
+
+        activatePowerUp() {
+            if (this.isPoweredUp) {
+                this.powerUpEndTime += 1000; 
+            } else {
+                this.isPoweredUp = true;
+                this.powerUpEndTime = Date.now() + 10000;
+                
+                this.growthAnimation = {
+                    startTime: Date.now(), duration: 2000, 
+                    startRadius: this.radius, targetRadius: this.baseRadius * POWERUP_SCALE_FACTOR, 
+                    startSpeed: this.speed, targetSpeed: this.baseSpeed * POWERUP_SCALE_FACTOR, 
+                };
+            }
+            powerupStatusDisplay.style.display = 'block';
+        }
+
+        deactivatePowerUp() {
+            this.isPoweredUp = false;
+            this.radius = this.baseRadius; 
+            this.speed = this.baseSpeed;
+            this.growthAnimation = null; 
+            powerupStatusDisplay.style.display = 'none';
+        }
+
+        grow(amount) {
+            this.baseRadius += amount;
+
+            const newBaseSpeedValue = 7 - (this.baseRadius / 100);
+            this.baseSpeed = Math.max(2.5, newBaseSpeedValue);
+            
+            // Update target values if animation is running, otherwise update current
+            if (this.growthAnimation) {
+                this.growthAnimation.targetRadius = this.baseRadius * POWERUP_SCALE_FACTOR; 
+                this.growthAnimation.targetSpeed = this.baseSpeed * POWERUP_SCALE_FACTOR; 
+            } else {
+                const factor = this.isPoweredUp ? POWERUP_SCALE_FACTOR : 1;
+                this.radius = this.baseRadius * factor;
+                this.speed = this.baseSpeed * factor;
+            }
+        }
+    }
+
+    class Food {
+        constructor(x, y, radius, color) {
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+            this.color = color;
+        }
+
+        draw(cameraX, cameraY) {
+            const drawX = this.x - cameraX;
+            const drawY = this.y - cameraY;
+            
+            // Skalierung basierend auf Spielerwachstum
+            const entityScale = getEntityScaleFactor(); 
+            const scaledRadius = this.radius * entityScale;
+
+            ctx.save();
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = this.color;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(drawX, drawY, scaledRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    class PowerUp extends Entity {
+        draw(cameraX, cameraY) {
+            ctx.save();
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = 'gold';
+            super.draw(cameraX, cameraY);
+            ctx.restore();
+        }
+    }
+
+    // --- INITIALIZATION AND ASSET LOADING ---
+
+    function resizeCanvas() {
+        const container = document.getElementById('game-container');
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+    }
+
+    function initGame() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // Reset game state
+        foodItems = []; powerUps = []; enemies = []; playerProjectiles = []; 
+        enemyProjectiles = []; activePowerUpAnimations = []; score = 0;
+        isGameOver = false; 
+        gameStartTime = Date.now(); 
+        document.getElementById('death-screen').classList.add('hidden'); 
+
+        loadAssets().then(loadedAssets => {
+            assets = loadedAssets;
+            // Spieler mittig in der neuen, größeren Welt
+            player = new Player(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, INITIAL_PLAYER_RADIUS, assets.player);
+            player.health = PLAYER_HEALTH;
+            healthDisplay.textContent = player.health.toFixed(0);
+
+            for (let i = 0; i < MAX_FOOD; i++) spawnFood();
+
+            assetsLoaded = true;
+            lastPowerUpSpawnTime = 0;
+            lastEnemySpawnTime = 0;
+            lastHealthRegenTime = Date.now();
+            gameLoop();
+        }).catch(error => {
+            console.error("Fehler beim Laden der Assets:", error);
+        });
+    }
+
+    function loadAssets() {
+        return new Promise((resolve) => {
+            let loadedCount = 0;
+            const totalAssets = 3;
+            const images = {};
+
+            const onLoaded = (name) => {
+                loadedCount++;
+                if (loadedCount === totalAssets) resolve(images);
+            };
+            
+            function loadImage(name, url) {
+                const img = new Image();
+                img.onload = () => onLoaded(name);
+                img.onerror = () => { console.error(`Failed to load ${name}: ${url}`); onLoaded(name); };
+                img.crossOrigin = "anonymous";
+                img.src = url;
+                images[name] = img;
+            }
+
+            loadImage('player', PLAYER_IMAGE_URL);
+            loadImage('powerUp', POWERUP_IMAGE_URL);
+            loadImage('enemy', ENEMY_IMAGE_URL); 
+        });
+    }
+
+    // --- GAME LOGIC (SPAWN) ---
+
+    function spawnFood() {
+        const radius = Math.random() * 5 + 3;
+        const x = Math.random() * WORLD_WIDTH; 
+        const y = Math.random() * WORLD_HEIGHT; 
+        const color = RAINBOW_COLORS[Math.floor(Math.random() * RAINBOW_COLORS.length)];
+        foodItems.push(new Food(x, y, radius, color));
+    }
+
+    function spawnPowerUp() {
+        const radius = 25;
+        const x = Math.random() * WORLD_WIDTH; 
+        const y = Math.random() * WORLD_HEIGHT; 
+        powerUps.push(new PowerUp(x, y, radius, assets.powerUp));
+    }
+
+    function spawnEnemy() {
+        const radius = 45;
+        // Spawn far away from center
+        const x = Math.random() < 0.5 ? Math.random() * WORLD_WIDTH / 4 : WORLD_WIDTH - Math.random() * WORLD_WIDTH / 4;
+        const y = Math.random() * WORLD_HEIGHT; 
+        enemies.push(new Enemy(x, y, radius, assets.enemy));
+    }
+    
+    function update() {
+        if (isGameOver) return;
+
+        // ScaleFactor basierend auf baseRadius und mit MIN_SCALE_FACTOR-Limit
+        scaleFactor = INITIAL_PLAYER_RADIUS / player.baseRadius;
+        scaleFactor = Math.max(MIN_SCALE_FACTOR, scaleFactor);
+
+
+        // Camera update
+        const viewportWidth = canvas.width / scaleFactor;
+        const viewportHeight = canvas.height / scaleFactor;
+        cameraX = player.x - viewportWidth / 2;
+        cameraY = player.y - viewportHeight / 2;
+        cameraX = Math.max(0, Math.min(WORLD_WIDTH - viewportWidth, cameraX));
+        cameraY = Math.max(0, Math.min(WORLD_HEIGHT - viewportHeight, cameraY));
+        
+        player.update();
+        
+        // 1% Lebensregeneration pro Sekunde (1 Punkt pro Sekunde)
+        const now = Date.now();
+        if (now > lastHealthRegenTime + 1000) {
+            if (player.health < PLAYER_HEALTH) {
+                player.health = Math.min(PLAYER_HEALTH, player.health + 1);
+            }
+            lastHealthRegenTime = now;
+        }
+
+        // Aktualisiere und entferne sterbende Gegner
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const enemy = enemies[i];
+            enemy.update();
+            if (enemy.isDying && now > enemy.deathTime + enemy.deathDuration) {
+                enemies.splice(i, 1); 
+            }
+        }
+        
+        playerProjectiles.forEach(p => p.update());
+        enemyProjectiles.forEach(p => p.update());
+        
+        checkCollisions();
+
+        // Power-Up animation update
+        for (let i = activePowerUpAnimations.length - 1; i >= 0; i--) {
+            const anim = activePowerUpAnimations[i];
+            const progress = Math.min(1, (Date.now() - anim.startTime) / anim.duration);
+            const { x: sx, y: sy } = anim.startPos;
+            const { x: px, y: py } = anim.player;
+
+            anim.powerUp.x = sx + (px - sx) * progress;
+            anim.powerUp.y = sy + (py - sy) * progress;
+            anim.rotation = progress * 4 * Math.PI; 
+            anim.powerUp.radius = anim.powerUp.baseRadius + (1 - anim.powerUp.baseRadius) * progress;
+
+            if (progress === 1) activePowerUpAnimations.splice(i, 1);
+        }
+        
+        // Spawning logic
+        if (now > lastPowerUpSpawnTime + POWERUP_SPAWN_INTERVAL * 1000 && powerUps.length < MAX_POWERUPS) {
+            spawnPowerUp();
+            lastPowerUpSpawnTime = now;
+        }
+
+        if (now > lastEnemySpawnTime + 10000 && enemies.length < MAX_ENEMIES) {
+            spawnEnemy();
+            lastEnemySpawnTime = now;
+        }
+
+        while (foodItems.length < MAX_FOOD) spawnFood();
+        
+        // Projectile cleanup
+        playerProjectiles = playerProjectiles.filter(p => p.x > 0 && p.x < WORLD_WIDTH && p.y > 0 && p.y < WORLD_HEIGHT);
+        enemyProjectiles = enemyProjectiles.filter(p => p.x > 0 && p.x < WORLD_WIDTH && p.y > 0 && p.y < WORLD_HEIGHT);
+
+        scoreDisplay.textContent = score;
+        healthDisplay.textContent = player.health.toFixed(0);
+    }
+
+    function checkCollisions() {
+        const entityScale = getEntityScaleFactor(); // Globaler Skalierungsfaktor für Entitäten
+
+        // Player vs Food
+        for (let i = foodItems.length - 1; i >= 0; i--) {
+            const food = foodItems[i];
+            const scaledFoodRadius = food.radius * entityScale; // Skalierte Radius für Kollision
+            if (dist(player.x, player.y, food.x, food.y) < player.radius + scaledFoodRadius) {
+                foodItems.splice(i, 1);
+                player.grow(0.5); 
+                score += 10;
+            }
+        }
+
+        // Player vs Power-Up
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            const powerUp = powerUps[i];
+            const scaledPowerUpRadius = powerUp.radius * entityScale; // Skalierte Radius für Kollision
+            if (dist(player.x, player.y, powerUp.x, powerUp.y) < player.radius + scaledPowerUpRadius) {
+                powerUps.splice(i, 1);
+                
+                activePowerUpAnimations.push({
+                    powerUp: new PowerUp(powerUp.x, powerUp.y, powerUp.radius, powerUp.image), 
+                    player: player, 
+                    startPos: { x: powerUp.x, y: powerUp.y },
+                    startTime: Date.now(),
+                    duration: POWERUP_ANIMATION_DURATION,
+                    rotation: 0 
+                });
+
+                player.activatePowerUp(); 
+                score += 50; 
+                lastPowerUpSpawnTime = Date.now(); 
+            }
+        }
+
+        // Player vs Enemy Projectile
+        for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
+            const proj = enemyProjectiles[i];
+            if (dist(player.x, player.y, proj.x, proj.y) < player.radius + proj.radius) {
+                player.takeDamage(proj.damage);
+                enemyProjectiles.splice(i, 1);
+            }
+        }
+        
+        // Player Projectile vs Enemy
+        for (let i = playerProjectiles.length - 1; i >= 0; i--) {
+            const proj = playerProjectiles[i];
+            if (!proj) continue; 
+            
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                const enemy = enemies[j];
+                if (enemy.isDying) continue;
+
+                const scaledEnemyRadius = enemy.radius * entityScale; // Skalierte Radius für Kollision
+                if (dist(enemy.x, enemy.y, proj.x, proj.y) < scaledEnemyRadius + proj.radius) {
+                    enemy.health -= proj.damage;
+                    playerProjectiles.splice(i, 1);
+                    score += 5;
+                    
+                    if (enemy.health <= 0) {
+                        enemy.isDying = true;
+                        enemy.deathTime = Date.now();
+                        score += 100;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    function drawWorldBounds() {
+        ctx.strokeStyle = '#333333';
+        ctx.lineWidth = 10;
+        ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    }
+    
+    // Funktion zur Anzeige des Game-Over-Bildschirms
+    function showDeathScreen() {
+        const duration = Date.now() - gameStartTime;
+        const durationSeconds = (duration / 1000).toFixed(1);
+
+        highScore = Math.max(highScore, score);
+
+        document.getElementById('final-score').textContent = score;
+        document.getElementById('high-score').textContent = highScore;
+        document.getElementById('game-duration').textContent = `${durationSeconds}s`;
+        
+        document.getElementById('death-screen').classList.remove('hidden');
+        
+        assetsLoaded = false;
+    }
+
+    // --- DRAWING ---
+
+    function draw() {
+        if (isGameOver) return;
+
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.save();
+        ctx.scale(scaleFactor, scaleFactor); 
+        ctx.translate(-cameraX, -cameraY); 
+
+        drawWorldBounds();
+
+        // PERFORMANCE-OPTIMIERUNG: Nur sichtbare Objekte zeichnen (Frustum Culling)
+        const viewportWidth = canvas.width / scaleFactor;
+        const viewportHeight = canvas.height / scaleFactor;
+        
+        // Füge einen kleinen Puffer hinzu, um Ränder zu vermeiden
+        const buffer = 100; 
+        const visibleMinX = cameraX - buffer;
+        const visibleMaxX = cameraX + viewportWidth + buffer;
+        const visibleMinY = cameraY - buffer;
+        const visibleMaxY = cameraY + viewportHeight + buffer;
+
+        // Entitäten mit Skalierung (Food, PowerUps, Enemies, Projectiles)
+        const entitiesToDraw = [...foodItems, ...powerUps, ...enemies, ...playerProjectiles, ...enemyProjectiles];
+
+        entitiesToDraw.forEach(entity => {
+            // Entitätsskalierung für die Prüfung verwenden
+            const entityScale = getEntityScaleFactor(); 
+            const scaledRadius = entity.radius * entityScale; 
+            
+            if (entity.x + scaledRadius > visibleMinX && 
+                entity.x - scaledRadius < visibleMaxX && 
+                entity.y + scaledRadius > visibleMinY && 
+                entity.y - scaledRadius < visibleMaxY) {
+                entity.draw(0, 0);
+            }
+        });
+        
+        // Animated Power-Ups (Diese befinden sich nahe dem Spieler, sind also immer sichtbar)
+        activePowerUpAnimations.forEach(anim => {
+            const p = anim.powerUp;
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(anim.rotation);
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = 'gold';
+            
+            if (p.image && p.image.complete) {
+                const drawSize = p.radius * 2;
+                ctx.drawImage(p.image, -p.radius, -p.radius, drawSize, drawSize);
+            } else {
+                ctx.fillStyle = 'yellow';
+                ctx.beginPath();
+                ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+        });
+
+        player.draw(0, 0);
+        
+        ctx.restore(); 
+    }
+
+    // --- GAME LOOP AND INPUT ---
+
+    function gameLoop() {
+        if (!assetsLoaded || isGameOver) return; 
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    let isMoving = false; 
+
+    function handleMove(e) {
+        const canvasRect = canvas.getBoundingClientRect();
+        let screenX, screenY;
+
+        if (e.touches && e.touches.length > 0) {
+            screenX = e.touches[0].clientX - canvasRect.left;
+            screenY = e.touches[0].clientY - canvasRect.top;
+            e.preventDefault(); 
+        } else {
+            screenX = e.clientX - canvasRect.left;
+            screenY = e.clientY - canvasRect.top;
+        }
+        
+        mouseX = screenX;
+        mouseY = screenY;
+        isMoving = true;
+    }
+    
+    function handleTapOrClick(e) {
+        if (isGameOver) return; 
+        
+        if (e.type === 'click' || e.type === 'touchend') {
+            // Verhindert Schießen bei versehentlichem Klick nach Mausbewegung
+            if (!isMoving || (e.type === 'click' && e.movementX === 0 && e.movementY === 0)) {
+                 player.shoot();
+            }
+        }
+        isMoving = false;
+    }
+
+    canvas.addEventListener('mousemove', handleMove);
+    canvas.addEventListener('touchmove', handleMove);
+    canvas.addEventListener('touchstart', (e) => {
+        handleMove(e);
+        isMoving = true;
+    });
+    canvas.addEventListener('touchend', handleTapOrClick);
+    canvas.addEventListener('click', handleTapOrClick);
+    
+    // Event Listener für den Feuer-Knopf
+    fireButton.addEventListener('touchstart', (e) => {
+        e.preventDefault(); 
+        player.shoot();
+    });
+    fireButton.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation(); 
+        player.shoot();
+    });
+
+    // Event Listener für den Neustart-Button
+    document.getElementById('restart-button').addEventListener('click', () => {
+        initGame();
+    });
+
+    window.onload = initGame;
+    
+</script>
+</body>
+</html>
